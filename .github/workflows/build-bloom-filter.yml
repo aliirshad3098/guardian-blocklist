@@ -1,0 +1,70 @@
+name: Build Prebuilt Bloom Filter
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag jiska blocklist process karna hai (e.g. v1)'
+        required: true
+        default: 'v1'
+
+permissions:
+  contents: write   # release assets upload karne ke liye zaroori
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (BuildBloomFilter.kt ke liye)
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install kotlinc
+        run: |
+          curl -s https://get.sdkman.io | bash
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install kotlin < /dev/null
+
+      - name: Download current guardian_blocklist.txt.gz from the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release download "$TAG" \
+            --repo "${{ github.repository }}" \
+            --pattern 'guardian_blocklist.txt.gz' \
+            --output guardian_blocklist.txt.gz \
+            --clobber
+
+      - name: Build BuildBloomFilter.kt
+        run: |
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          kotlinc tools/blocklist-builder/BuildBloomFilter.kt -include-runtime -d build-bloom-filter.jar
+
+      # version-string = tag + run number — guaranteed unique har baar yeh
+      # workflow chale, chahe blocklist ka content na bhi badla ho. Phone
+      # ka manifest-version-compare isi uniqueness pe depend karta hai
+      # (naya version dikhte hi naya .bin download karta hai).
+      - name: Run BuildBloomFilter (produces guardian_blocklist.bin + manifest.json)
+        run: |
+          VERSION="${{ inputs.tag }}-${{ github.run_number }}"
+          java -jar build-bloom-filter.jar \
+            guardian_blocklist.txt.gz \
+            guardian_blocklist.bin \
+            manifest.json \
+            "$VERSION"
+          echo "Built version: $VERSION"
+
+      - name: Upload guardian_blocklist.bin + manifest.json to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            --repo "${{ github.repository }}" \
+            guardian_blocklist.bin manifest.json \
+            --clobber
